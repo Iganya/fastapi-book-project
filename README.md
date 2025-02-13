@@ -137,6 +137,170 @@ The API includes proper error handling for:
 4. Push to branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
+
+
+##  Deployment Guide
+
+### Prerequisites
+Ensure you have the following before proceeding:
+- An AWS EC2 instance (Ubuntu 22.04+ recommended)
+- SSH access to the server (`.pem` key file)
+- A registered domain (optional, for Nginx setup)
+- GitHub repository with your FastAPI project
+
+### 1. Connect to Your Server
+```bash
+ssh -i your-key.pem ubuntu@your-instance-ip
+```
+Replace `your-key.pem` with your private key file and `your-instance-ip` with your EC2 public IP.
+
+### 2. Update and Install Dependencies
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install python3-pip python3-venv nginx git -y
+```
+
+### 3. Clone Your FastAPI Project
+```bash
+cd /var/www
+sudo git clone https://github.com/your-username/your-repo.git fastapi-app
+cd fastapi-app
+```
+
+### 4. Set Up Virtual Environment
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### 5. Create a Systemd Service
+```bash
+sudo nano /etc/systemd/system/fastapi.service
+```
+Paste the following, updating paths where necessary:
+```ini
+[Unit]
+Description=FastAPI application
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/fastapi-app
+ExecStart=/home/ubuntu/fastapi-app/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+Save and exit (`CTRL + X`, then `Y`, then `Enter`).
+
+Reload systemd and start the service:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start fastapi.service
+sudo systemctl enable fastapi.service
+```
+Check the status:
+```bash
+sudo systemctl status fastapi.service
+```
+
+### 6. Configure Nginx as a Reverse Proxy
+```bash
+sudo nano /etc/nginx/sites-available/fastapi
+```
+Paste the following, updating your domain/IP:
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com or your-instance-ip;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+Save and exit.
+
+Enable the configuration:
+```bash
+sudo ln -s /etc/nginx/sites-available/fastapi /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+### 7. Open Firewall (If Needed)
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+```
+
+### 8. Test Your API
+Check if your app is running:
+```bash
+curl http://your-instance-ip/
+```
+Or open it in a browser: `http://your-instance-ip/`
+
+### 9. Set Up GitHub Actions for CI/CD
+#### Add SSH Secrets to GitHub Repository
+1. Go to your repository on GitHub.
+2. Navigate to **Settings > Secrets and Variables > Actions**.
+3. Add the following secrets:
+   - `SERVER_IP` → Your EC2 instance IP.
+   - `SSH_USER` → `ubuntu`
+   - `SSH_PRIVATE_KEY` → Paste the content of your `.pem` file.
+
+#### Create `.github/workflows/deploy.yml`
+```yaml
+name: Deploy FastAPI
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/fastapi-app
+            git pull origin main
+            source venv/bin/activate
+            pip install -r requirements.txt
+            sudo systemctl restart fastapi.service
+            sudo systemctl restart nginx
+```
+
+### 10. Verify Deployment
+After pushing to `main`, GitHub Actions should automatically deploy your app. Test it again:
+```bash
+curl http://your-instance-ip/
+```
+Or open it in your browser.
+
+---
+Your FastAPI application is now live with automatic deployments! 🚀
+
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
